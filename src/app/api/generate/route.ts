@@ -80,6 +80,9 @@ function buildSystemPrompt(
   const fonts = analysis?.commonFonts || ['Calibri', 'Arial', 'sans-serif']
   const signatures = analysis?.signatures || []
   const hasImages = analysis?.hasImages
+  const links = analysis?.links || []
+  const phones = analysis?.phones || []
+  const imageSources = analysis?.imageSources || []
 
   const samplesText = samples
     .map((s, i) => `Пример ${i + 1}:\nТема: ${s.subject}\n${s.textPreview}`)
@@ -89,13 +92,25 @@ function buildSystemPrompt(
     ? `Используй ЭТУ подпись в конце каждого письма (точно как указано):\n${signatures.join('\n---\n')}`
     : 'Включи профессиональную подпись в стиле, соответствующем примерам.'
 
+  const linksBlock = links.length > 0
+    ? `\nССЫЛКИ АВТОРА (используй их когда уместно):\n${links.join('\n')}`
+    : ''
+
+  const phonesBlock = phones.length > 0
+    ? `\nНОМЕРА ТЕЛЕФОНОВ АВТОРА (используй в подписи когда уместно):\n${phones.join('\n')}`
+    : ''
+
+  const imagesBlock = imageSources.length > 0
+    ? `\nКАРТИНКИ/ЛОГОТИПЫ АВТОРА (вставляй в подпись когда уместно):\n${(imageSources as string[]).map((src: string) => `<img src="${src}" alt="logo">`).join('\n')}`
+    : ''
+
   return `Ты — эксперт по деловой переписке. Твоя задача — писать профессиональные письма, которые НЕВОЗМОЖНО отличить от написанных человеком.
 
 СТИЛЬ:
 - Точно соблюдай тон, формальность и стиль письма из предоставленных примеров
 - Используй те же паттерны приветствия и завершения
 - Пиши естественно, без шаблонных фраз
-- ИЗБЕГАЙ клише ИИ: "надеюсь это письмо найдёт вас в добром здравии", "пожалуйста, не стесняйтесь", "буду рад ответить на вопросы", "всего наилучшего" (если это не стиль автора)
+- ИЗБЕГАЙ клише ИИ: "надеюсь это письмо найдёт вас в добром здравии", "пожалуйста, не стесняйтесь", "буду рад ответить на вопросы" (если это не стиль автора)
 - Будь прямым и профессиональным
 - Используй тот же уровень формальности, что в примерах
 - Пиши на том же языке, что и запрос пользователя (русский/английский)
@@ -103,10 +118,10 @@ function buildSystemPrompt(
 ФОРМАТИРОВАНИЕ:
 - Шрифты: ${fonts.join(', ')}
 - ${signatureBlock}
-- ${hasImages ? 'Автор использует картинки/логотипы в письмах — учитывай это' : ''}
+- ${hasImages ? 'Автор использует картинки/логотипы в письмах' : ''}
 - Пиши обычный текст, БЕЗ markdown форматирования
 - Короткие абзацы (2-4 предложения)
-- Если есть ссылки — используй формат: https://example.com (не гиперссылки текстом)
+- Если есть ссылки — пиши их как https://example.com (не гиперссылки текстом)${linksBlock}${phonesBlock}${imagesBlock}
 
 ПРИМЕРЫ ПИСЕМ ДЛЯ ПОДРАЖАНИЯ:
 ${samplesText}
@@ -118,6 +133,9 @@ function textToOutlookHtml(text: string, analysis: any): string {
   const fonts = analysis?.commonFonts || ['Calibri', 'Arial', 'sans-serif']
   const fontFamily = fonts.slice(0, 2).join(', ')
   const signatures = analysis?.signatures || []
+  const links = analysis?.links || []
+  const phones = analysis?.phones || []
+  const imageSources = analysis?.imageSources || []
 
   const paragraphs = text.split('\n\n').filter(Boolean)
 
@@ -139,12 +157,21 @@ function textToOutlookHtml(text: string, analysis: any): string {
         return `<p style="margin: 0; font-family: ${fontFamily}; font-size: 11pt;"><a href="${escapeHtml(line)}" style="color: #0563C1; text-decoration: underline;">${escapeHtml(line)}</a></p>`
       }
 
+      const isPhone = /(?:\+7|8)[\s\-\(]*\d{3}[\s\-\)]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}/.test(line)
+      if (isPhone) {
+        return `<p style="margin: 0; font-family: ${fontFamily}; font-size: 11pt;"><a href="tel:${line.replace(/\D/g, '')}" style="color: #0563C1; text-decoration: none;">${escapeHtml(line)}</a></p>`
+      }
+
       return `<p style="margin: 0; font-family: ${fontFamily}; font-size: 11pt; color: #000000;">${formatLine(line)}</p>`
     }).join('')
   }).join('')
 
+  const signatureImages = (imageSources as string[]).length > 0
+    ? (imageSources as string[]).map((src: string) => `<img src="${src}" style="max-height: 60px; margin: 2px;" alt="">`).join(' ')
+    : ''
+
   const signatureHtml = signatures.length > 0
-    ? `<div style="margin-top: 16pt; padding-top: 8pt; border-top: 1px solid #CCCCCC; color: #666666; font-size: 10pt;">${signatures[0]}</div>`
+    ? `<div style="margin-top: 16pt; padding-top: 8pt; border-top: 1px solid #CCCCCC; color: #666666; font-size: 10pt;">${signatureImages ? signatureImages + '<br>' : ''}${signatures[0]}</div>`
     : ''
 
   return `<!DOCTYPE html>

@@ -6,20 +6,10 @@ export async function POST(request: NextRequest) {
     const formData = await request.formData()
     const files = formData.getAll('emails') as File[]
 
-    const pastedEmails: Array<{ html: string; text: string }> = []
-    let i = 0
-    while (true) {
-      const html = formData.get(`pasted_${i}_html`)
-      const text = formData.get(`pasted_${i}_text`)
-      if (!html && !text) break
-      pastedEmails.push({
-        html: (html as string) || '',
-        text: (text as string) || ''
-      })
-      i++
-    }
+    const pastedHtml = formData.getAll('pasted_html') as string[]
+    const pastedText = formData.getAll('pasted_text') as string[]
 
-    if (!files.length && !pastedEmails.length) {
+    if (!files.length && !pastedHtml.length) {
       return NextResponse.json(
         { error: 'Не предоставлено ни файлов, ни вставленных писем' },
         { status: 400 }
@@ -28,7 +18,8 @@ export async function POST(request: NextRequest) {
 
     const parsedEmails: Array<{
       from: string; to: string; subject: string; text: string;
-      html: string; signature: string | null; fonts: string[]; hasImages: boolean
+      html: string; signature: string | null; fonts: string[];
+      hasImages: boolean; links: string[]; phones: string[]; imageSources: string[]
     }> = []
 
     for (const file of files) {
@@ -53,27 +44,38 @@ export async function POST(request: NextRequest) {
         html: parsed.html,
         signature: parsed.signature,
         fonts: parsed.fonts,
-        hasImages: parsed.images.length > 0
+        hasImages: parsed.images.length > 0,
+        links: extractLinks(parsed.html || parsed.text),
+        phones: extractPhones(parsed.html || parsed.text),
+        imageSources: extractImageSources(parsed.html)
       })
     }
 
-    for (const pasted of pastedEmails) {
-      const html = pasted.html || ''
+    for (let i = 0; i < pastedHtml.length; i++) {
+      const html = pastedHtml[i] || ''
+      const text = pastedText[i] || ''
       const fonts = extractFonts(html)
-      const signature = extractSignature(html || pasted.text)
+      const signature = extractSignature(html || text)
       const hasImages = html.includes('<img') || html.includes('src=')
 
       parsedEmails.push({
         from: '',
         to: '',
         subject: '',
-        text: pasted.text,
+        text,
         html,
         signature,
         fonts,
-        hasImages
+        hasImages,
+        links: extractLinks(html || text),
+        phones: extractPhones(html || text),
+        imageSources: extractImageSources(html)
       })
     }
+
+    const allLinks = parsedEmails.flatMap(e => e.links)
+    const allPhones = parsedEmails.flatMap(e => e.phones)
+    const allImages = parsedEmails.flatMap(e => e.imageSources)
 
     const analysis = {
       emailCount: parsedEmails.length,
@@ -83,10 +85,13 @@ export async function POST(request: NextRequest) {
       averageLength: Math.round(
         parsedEmails.reduce((sum, e) => sum + e.text.length, 0) / parsedEmails.length
       ),
+      links: [...new Set(allLinks)],
+      phones: [...new Set(allPhones)],
+      imageSources: [...new Set(allImages)],
       samples: parsedEmails.slice(0, 3).map(e => ({
         subject: e.subject || 'Вставленное письмо',
         textPreview: e.text.substring(0, 500),
-        htmlPreview: e.html.substring(0, 1000)
+        htmlPreview: e.html.substring(0, 2000)
       }))
     }
 
@@ -141,4 +146,38 @@ function extractCommonFonts(emails: Array<{ fonts: string[] }>): string[] {
     .sort(([, a], [, b]) => b - a)
     .slice(0, 3)
     .map(([font]) => font)
+}
+
+function extractLinks(content: string): string[] {
+  const links: string[] = []
+  const hrefRegex = /href=["'](https?:\/\/[^"']+)["']/gi
+  let match
+  while ((match = hrefRegex.exec(content)) !== null) {
+    links.push(match[1])
+  }
+  const urlRegex = /(https?:\/\/[^\s<>"')]+)/gi
+  while ((match = urlRegex.exec(content)) !== null) {
+    if (!links.includes(match[1])) links.push(match[1])
+  }
+  return links
+}
+
+function extractPhones(content: string): string[] {
+  const phones: string[] = []
+  const phoneRegex = /(?:\+7|8)[\s\-\(]*\d{3}[\s\-\)]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}/g
+  let match
+  while ((match = phoneRegex.exec(content)) !== null) {
+    phones.push(match[0])
+  }
+  return phones
+}
+
+function extractImageSources(html: string): string[] {
+  const sources: string[] = []
+  const srcRegex = /src=["']([^"']+)["']/gi
+  let match
+  while ((match = srcRegex.exec(html)) !== null) {
+    sources.push(match[1])
+  }
+  return sources
 }
