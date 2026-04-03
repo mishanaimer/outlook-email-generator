@@ -7,6 +7,7 @@ const openai = new OpenAI({
 })
 
 const FREE_MODELS = [
+  'openrouter/free',
   'google/gemma-3-27b-it:free',
   'meta-llama/llama-3.3-8b-instruct:free',
   'mistralai/mistral-7b-instruct:free',
