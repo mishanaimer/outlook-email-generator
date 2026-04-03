@@ -22,8 +22,8 @@ async function tryModels(models: string[], systemPrompt: string, userPrompt: str
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt }
         ],
-        temperature: 0.3,
-        max_tokens: 4000
+        temperature: 0.7,
+        max_tokens: 1500
       })
       return response.choices[0].message.content || ''
     } catch (err: any) {
@@ -53,11 +53,13 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const systemPrompt = buildSystemPrompt(templateHtml, templateText, templateInfo)
+    const systemPrompt = buildSystemPrompt(templateText, templateInfo)
 
-    const generatedHtml = await tryModels(FREE_MODELS, systemPrompt, prompt)
+    const generatedText = await tryModels(FREE_MODELS, systemPrompt, prompt)
 
-    return NextResponse.json({ html: generatedHtml })
+    const resultHtml = injectTextIntoTemplate(generatedText, templateHtml, templateInfo)
+
+    return NextResponse.json({ html: resultHtml, text: generatedText })
   } catch (error: any) {
     console.error('Generate error:', error?.message || error)
     return NextResponse.json(
@@ -67,43 +69,129 @@ export async function POST(request: NextRequest) {
   }
 }
 
-function buildSystemPrompt(templateHtml: string, templateText: string, info: any): string {
+function buildSystemPrompt(templateText: string, info: any): string {
   const links = (info?.links || []) as string[]
   const phones = (info?.phones || []) as string[]
-  const imageSources = (info?.imageSources || []) as string[]
   const fonts = (info?.fonts || ['Calibri', 'Arial', 'sans-serif']) as string[]
 
   const linksBlock = links.length > 0
-    ? `\nССЫЛКИ ИЗ ШАБЛОНА (сохрани их в письме, не удаляй):\n${links.join('\n')}`
+    ? `\nССЫЛКИ (используй когда уместно):\n${links.join('\n')}`
     : ''
 
   const phonesBlock = phones.length > 0
-    ? `\nТЕЛЕФОНЫ ИЗ ШАБЛОНА (сохрани в подписи):\n${phones.join('\n')}`
+    ? `\nТЕЛЕФОНЫ (используй в подписи когда уместно):\n${phones.join('\n')}`
     : ''
 
-  const imagesBlock = imageSources.length > 0
-    ? `\nКАРТИНКИ/ЛОГОТИПЫ ИЗ ШАБЛОНА (сохрани все img теги):\n${imageSources.map((src: string) => `<img src="${src}">`).join('\n')}`
-    : ''
+  return `Ты — ассистент по деловой переписке. Пиши текст письма НА РУССКОМ ЯЗЫКЕ.
 
-  return `Ты — HTML-редактор писем для Outlook. Твоя задача — МОДИФИЦИРОВАТЬ существующий HTML-шаблон письма, заменяя только текстовое содержимое по запросу пользователя.
+ПРАВИЛА:
+1. Пиши ТОЛЬКО ТЕКСТ письма — БЕЗ HTML, БЕЗ markdown, БЕЗ обёрток
+2. Пиши НА РУССКОМ ЯЗЫКЕ (если пользователь не просит другой язык)
+3. НЕ пиши вступления типа "Вот ваше письмо:" или "Конечно!"
+4. НЕ пиши заключений типа "Надеюсь, это поможет"
+5. Используй стиль и тон из примеров ниже
+6. Короткие абзацы (2-4 предложения)
+7. Разделяй абзацы ДВОЙНЫМ переносом строки
 
-КРИТИЧЕСКИЕ ПРАВИЛА:
-1. СОХРАНИ ПОЛНУЮ HTML-СТРУКТУРУ шаблона — все div, table, span, p теги, классы, стили
-2. СОХРАНИ ВСЕ КАРТИНКИ (<img>) — не удаляй и не меняй src
-3. СОХРАНИ ВСЕ ССЫЛКИ (<a href>) — не удаляй и не меняй href
-4. СОХРАНИ ВСЕ СТИЛИ — font-family, font-size, color, margin, padding, background
-5. СОХРАНИ ПОДПИСЬ — блок подписи с контактами, телефонами, логотипами
-6. ЗАМЕНИ ТОЛЬКО ТЕКСТОВОЕ СОДЕРЖИМОЕ — текст в тегах p, span, td по запросу пользователя
-7. НЕ ДОБАВЛЯЙ markdown — никакого ** или * или #
-8. НЕ МЕНЯЙ СТРУКТУРУ — если в шаблоне таблица, оставь таблицу. Если div, оставь div.
-9. ВЫВОДИ ТОЛЬКО ГОТОВЫЙ HTML — без объяснений, без markdown code blocks, без комментариев
-10. Если пользователь просит изменить получателя, тему, содержание — меняй только эти части, остальное оставь как есть
-
-ФОРМАТИРОВАНИЕ РЕЗУЛЬТАТА:
-- Полный HTML документ (с <html>, <head>, <body>)
-- Inline стили как в оригинальном шаблоне
+ФОРМАТИРОВАНИЕ:
 - Шрифты: ${fonts.join(', ')}
-- Цвета ссылок: #0563C1 (стандарт Outlook)${linksBlock}${phonesBlock}${imagesBlock}
+- Обычный текст, без форматирования${linksBlock}${phonesBlock}
 
-ВАЖНО: Выведи ТОЛЬКО HTML, без обёрток, без пояснений. Начни сразу с <!DOCTYPE html> или <html>.`
+ПРИМЕР ТЕКСТА ИЗ ШАБЛОНА (для понимания стиля):
+---
+${templateText.substring(0, 1500)}
+---
+
+Напиши текст письма по запросу пользователя. ТОЛЬКО ТЕКСТ, ничего больше.`
+}
+
+function injectTextIntoTemplate(generatedText: string, templateHtml: string, info: any): string {
+  const fonts = (info?.fonts || ['Calibri', 'Arial', 'sans-serif']) as string[]
+  const fontFamily = fonts.slice(0, 2).join(', ')
+
+  const paragraphs = generatedText
+    .split('\n\n')
+    .filter(p => p.trim())
+
+  const bodyHtml = paragraphs.map(p => {
+    const lines = p.split('\n').map(l => l.trim()).filter(Boolean)
+    return lines.map(line => {
+      const isSignature = line.startsWith('--') ||
+        line.toLowerCase().includes('с уважением') ||
+        line.toLowerCase().includes('best regards') ||
+        line.toLowerCase().includes('kind regards') ||
+        line.toLowerCase().includes('с наилучшими')
+
+      if (isSignature) {
+        return `<p style="margin-top: 12pt; color: #666666; font-size: 10pt;">${formatLine(line)}</p>`
+      }
+
+      const isLink = /^https?:\/\//.test(line)
+      if (isLink) {
+        return `<p style="margin: 0; font-family: ${fontFamily}; font-size: 11pt;"><a href="${escapeHtml(line)}" style="color: #0563C1; text-decoration: underline;">${escapeHtml(line)}</a></p>`
+      }
+
+      const isPhone = /(?:\+7|8)[\s\-\(]*\d{3}[\s\-\)]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}/.test(line)
+      if (isPhone) {
+        return `<p style="margin: 0; font-family: ${fontFamily}; font-size: 11pt;"><a href="tel:${line.replace(/\D/g, '')}" style="color: #0563C1; text-decoration: none;">${escapeHtml(line)}</a></p>`
+      }
+
+      return `<p style="margin: 0; font-family: ${fontFamily}; font-size: 11pt; color: #000000;">${formatLine(line)}</p>`
+    }).join('')
+  }).join('')
+
+  const signatureHtml = extractSignatureFromTemplate(templateHtml)
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light">
+<!--[if mso]>
+<style type="text/css">
+body, table, td {font-family: ${fontFamily}, Arial, sans-serif !important; font-size: 11pt !important;}
+</style>
+<![endif]-->
+</head>
+<body style="margin: 0; padding: 0; background-color: #FFFFFF;">
+<div style="font-family: ${fontFamily}; font-size: 11pt; color: #000000; line-height: 1.4;">
+${bodyHtml}
+${signatureHtml}
+</div>
+</body>
+</html>`
+}
+
+function extractSignatureFromTemplate(templateHtml: string): string {
+  const signaturePatterns = [
+    /(<div[^>]*class="[^"]*signature[^"]*"[^>]*>[\s\S]*?<\/div>)/i,
+    /(<div[^>]*style="[^"]*border-top[^"]*"[^>]*>[\s\S]*?<\/div>)/i,
+    /(<p[^>]*style="[^"]*color:\s*#666666[^"]*"[^>]*>[\s\S]*?<\/p>)/i,
+    /(<table[^>]*class="[^"]*signature[^"]*"[^>]*>[\s\S]*?<\/table>)/i,
+  ]
+
+  for (const pattern of signaturePatterns) {
+    const match = pattern.exec(templateHtml)
+    if (match) {
+      return `<div style="margin-top: 16pt; padding-top: 8pt;">${match[1]}</div>`
+    }
+  }
+
+  return ''
+}
+
+function formatLine(line: string): string {
+  let formatted = escapeHtml(line)
+  formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+  formatted = formatted.replace(/\*(.+?)\*/g, '<em>$1</em>')
+  formatted = formatted.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" style="color: #0563C1; text-decoration: underline;">$1</a>')
+  return formatted
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
 }

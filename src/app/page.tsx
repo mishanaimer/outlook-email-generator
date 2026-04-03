@@ -378,7 +378,7 @@ export default function Home() {
               <button onClick={() => setPreviewTemplate(null)} className="text-gray-400 hover:text-gray-600">✕</button>
             </div>
             <div className="flex-1 overflow-y-auto p-4">
-              <div dangerouslySetInnerHTML={{ __html: previewTemplate.html }} />
+              <div dangerouslySetInnerHTML={{ __html: sanitizeTemplateHtml(previewTemplate.html) }} />
             </div>
           </div>
         </div>
@@ -432,4 +432,10 @@ function extractImageSources(html: string): string[] {
     }
   }
   return sources
+}
+
+function sanitizeTemplateHtml(html: string): string {
+  return html
+    .replace(/src=["']cid:([^"']+)["']/gi, 'src="data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'80\' height=\'60\'%3E%3Crect fill=\'%23ddd\' width=\'80\' height=\'60\'/%3E%3Ctext fill=\'%23999\' x=\'50%25\' y=\'50%25\' text-anchor=\'middle\' dy=\'.3em\' font-size=\'10\'%3E[Картинка]%3C/text%3E%3C/svg%3E" alt="[Картинка]"')
+    .replace(/src=["']file:\/\/\/[^"']*["']/gi, 'src="data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'80\' height=\'60\'%3E%3Crect fill=\'%23ddd\' width=\'80\' height=\'60\'/%3E%3Ctext fill=\'%23999\' x=\'50%25\' y=\'50%25\' text-anchor=\'middle\' dy=\'.3em\' font-size=\'10\'%3E[Файл]%3C/text%3E%3C/svg%3E" alt="[Файл]"')
 }
