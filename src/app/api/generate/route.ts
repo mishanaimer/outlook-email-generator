@@ -10,7 +10,6 @@ const FREE_MODELS = [
   'openrouter/free',
   'google/gemma-3-27b-it:free',
   'meta-llama/llama-3.3-8b-instruct:free',
-  'mistralai/mistral-7b-instruct:free',
   'qwen/qwen2.5-72b-instruct:free'
 ]
 
@@ -23,8 +22,8 @@ async function tryModels(models: string[], systemPrompt: string, userPrompt: str
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt }
         ],
-        temperature: 0.7,
-        max_tokens: 2000
+        temperature: 0.3,
+        max_tokens: 4000
       })
       return response.choices[0].message.content || ''
     } catch (err: any) {
@@ -37,11 +36,11 @@ async function tryModels(models: string[], systemPrompt: string, userPrompt: str
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { prompt, emailSamples, analysis } = body
+    const { prompt, templateHtml, templateText, templateInfo } = body
 
-    if (!prompt) {
+    if (!prompt || !templateHtml) {
       return NextResponse.json(
-        { error: 'Требуется запрос' },
+        { error: 'Требуются запрос и HTML шаблона' },
         { status: 400 }
       )
     }
@@ -49,21 +48,16 @@ export async function POST(request: NextRequest) {
     const hasKey = !!(process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY)
     if (!hasKey) {
       return NextResponse.json(
-        { error: 'API ключ не настроен. Добавьте OPENROUTER_API_KEY в переменные окружения Vercel.' },
+        { error: 'API ключ не настроен' },
         { status: 500 }
       )
     }
 
-    const systemPrompt = buildSystemPrompt(emailSamples, analysis)
+    const systemPrompt = buildSystemPrompt(templateHtml, templateText, templateInfo)
 
-    const generatedText = await tryModels(FREE_MODELS, systemPrompt, prompt)
+    const generatedHtml = await tryModels(FREE_MODELS, systemPrompt, prompt)
 
-    const htmlOutput = textToOutlookHtml(generatedText, analysis)
-
-    return NextResponse.json({
-      text: generatedText,
-      html: htmlOutput
-    })
+    return NextResponse.json({ html: generatedHtml })
   } catch (error: any) {
     console.error('Generate error:', error?.message || error)
     return NextResponse.json(
@@ -73,142 +67,43 @@ export async function POST(request: NextRequest) {
   }
 }
 
-function buildSystemPrompt(
-  samples: Array<{ subject: string; textPreview: string; htmlPreview?: string }>,
-  analysis: any
-): string {
-  const fonts = analysis?.commonFonts || ['Calibri', 'Arial', 'sans-serif']
-  const signatures = analysis?.signatures || []
-  const hasImages = analysis?.hasImages
-  const links = analysis?.links || []
-  const phones = analysis?.phones || []
-  const imageSources = analysis?.imageSources || []
-
-  const samplesText = samples
-    .map((s, i) => `Пример ${i + 1}:\nТема: ${s.subject}\n${s.textPreview}`)
-    .join('\n\n---\n\n')
-
-  const signatureBlock = signatures.length > 0
-    ? `Используй ЭТУ подпись в конце каждого письма (точно как указано):\n${signatures.join('\n---\n')}`
-    : 'Включи профессиональную подпись в стиле, соответствующем примерам.'
+function buildSystemPrompt(templateHtml: string, templateText: string, info: any): string {
+  const links = (info?.links || []) as string[]
+  const phones = (info?.phones || []) as string[]
+  const imageSources = (info?.imageSources || []) as string[]
+  const fonts = (info?.fonts || ['Calibri', 'Arial', 'sans-serif']) as string[]
 
   const linksBlock = links.length > 0
-    ? `\nССЫЛКИ АВТОРА (используй их когда уместно):\n${links.join('\n')}`
+    ? `\nССЫЛКИ ИЗ ШАБЛОНА (сохрани их в письме, не удаляй):\n${links.join('\n')}`
     : ''
 
   const phonesBlock = phones.length > 0
-    ? `\nНОМЕРА ТЕЛЕФОНОВ АВТОРА (используй в подписи когда уместно):\n${phones.join('\n')}`
+    ? `\nТЕЛЕФОНЫ ИЗ ШАБЛОНА (сохрани в подписи):\n${phones.join('\n')}`
     : ''
 
   const imagesBlock = imageSources.length > 0
-    ? `\nКАРТИНКИ/ЛОГОТИПЫ АВТОРА (вставляй в подпись когда уместно):\n${(imageSources as string[]).map((src: string) => `<img src="${src}" alt="logo">`).join('\n')}`
+    ? `\nКАРТИНКИ/ЛОГОТИПЫ ИЗ ШАБЛОНА (сохрани все img теги):\n${imageSources.map((src: string) => `<img src="${src}">`).join('\n')}`
     : ''
 
-  return `Ты — эксперт по деловой переписке. Твоя задача — писать профессиональные письма, которые НЕВОЗМОЖНО отличить от написанных человеком.
+  return `Ты — HTML-редактор писем для Outlook. Твоя задача — МОДИФИЦИРОВАТЬ существующий HTML-шаблон письма, заменяя только текстовое содержимое по запросу пользователя.
 
-СТИЛЬ:
-- Точно соблюдай тон, формальность и стиль письма из предоставленных примеров
-- Используй те же паттерны приветствия и завершения
-- Пиши естественно, без шаблонных фраз
-- ИЗБЕГАЙ клише ИИ: "надеюсь это письмо найдёт вас в добром здравии", "пожалуйста, не стесняйтесь", "буду рад ответить на вопросы" (если это не стиль автора)
-- Будь прямым и профессиональным
-- Используй тот же уровень формальности, что в примерах
-- Пиши на том же языке, что и запрос пользователя (русский/английский)
+КРИТИЧЕСКИЕ ПРАВИЛА:
+1. СОХРАНИ ПОЛНУЮ HTML-СТРУКТУРУ шаблона — все div, table, span, p теги, классы, стили
+2. СОХРАНИ ВСЕ КАРТИНКИ (<img>) — не удаляй и не меняй src
+3. СОХРАНИ ВСЕ ССЫЛКИ (<a href>) — не удаляй и не меняй href
+4. СОХРАНИ ВСЕ СТИЛИ — font-family, font-size, color, margin, padding, background
+5. СОХРАНИ ПОДПИСЬ — блок подписи с контактами, телефонами, логотипами
+6. ЗАМЕНИ ТОЛЬКО ТЕКСТОВОЕ СОДЕРЖИМОЕ — текст в тегах p, span, td по запросу пользователя
+7. НЕ ДОБАВЛЯЙ markdown — никакого ** или * или #
+8. НЕ МЕНЯЙ СТРУКТУРУ — если в шаблоне таблица, оставь таблицу. Если div, оставь div.
+9. ВЫВОДИ ТОЛЬКО ГОТОВЫЙ HTML — без объяснений, без markdown code blocks, без комментариев
+10. Если пользователь просит изменить получателя, тему, содержание — меняй только эти части, остальное оставь как есть
 
-ФОРМАТИРОВАНИЕ:
+ФОРМАТИРОВАНИЕ РЕЗУЛЬТАТА:
+- Полный HTML документ (с <html>, <head>, <body>)
+- Inline стили как в оригинальном шаблоне
 - Шрифты: ${fonts.join(', ')}
-- ${signatureBlock}
-- ${hasImages ? 'Автор использует картинки/логотипы в письмах' : ''}
-- Пиши обычный текст, БЕЗ markdown форматирования
-- Короткие абзацы (2-4 предложения)
-- Если есть ссылки — пиши их как https://example.com (не гиперссылки текстом)${linksBlock}${phonesBlock}${imagesBlock}
+- Цвета ссылок: #0563C1 (стандарт Outlook)${linksBlock}${phonesBlock}${imagesBlock}
 
-ПРИМЕРЫ ПИСЕМ ДЛЯ ПОДРАЖАНИЯ:
-${samplesText}
-
-Когда пользователь просит написать письмо — пиши его СРАЗУ, без вступлений, объяснений или комментариев.`
-}
-
-function textToOutlookHtml(text: string, analysis: any): string {
-  const fonts = analysis?.commonFonts || ['Calibri', 'Arial', 'sans-serif']
-  const fontFamily = fonts.slice(0, 2).join(', ')
-  const signatures = analysis?.signatures || []
-  const links = analysis?.links || []
-  const phones = analysis?.phones || []
-  const imageSources = analysis?.imageSources || []
-
-  const paragraphs = text.split('\n\n').filter(Boolean)
-
-  const htmlParagraphs = paragraphs.map(p => {
-    const lines = p.split('\n').map(line => line.trim()).filter(Boolean)
-    return lines.map(line => {
-      const isSignature = line.startsWith('--') ||
-        line.toLowerCase().includes('с уважением') ||
-        line.toLowerCase().includes('best regards') ||
-        line.toLowerCase().includes('kind regards') ||
-        line.toLowerCase().includes('с наилучшими')
-
-      if (isSignature) {
-        return `<p style="margin-top: 12pt; color: #666666; font-size: 10pt;">${formatLine(line)}</p>`
-      }
-
-      const isLink = /^https?:\/\//.test(line)
-      if (isLink) {
-        return `<p style="margin: 0; font-family: ${fontFamily}; font-size: 11pt;"><a href="${escapeHtml(line)}" style="color: #0563C1; text-decoration: underline;">${escapeHtml(line)}</a></p>`
-      }
-
-      const isPhone = /(?:\+7|8)[\s\-\(]*\d{3}[\s\-\)]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}/.test(line)
-      if (isPhone) {
-        return `<p style="margin: 0; font-family: ${fontFamily}; font-size: 11pt;"><a href="tel:${line.replace(/\D/g, '')}" style="color: #0563C1; text-decoration: none;">${escapeHtml(line)}</a></p>`
-      }
-
-      return `<p style="margin: 0; font-family: ${fontFamily}; font-size: 11pt; color: #000000;">${formatLine(line)}</p>`
-    }).join('')
-  }).join('')
-
-  const signatureImages = (imageSources as string[]).length > 0
-    ? (imageSources as string[]).map((src: string) => `<img src="${src}" style="max-height: 60px; margin: 2px;" alt="">`).join(' ')
-    : ''
-
-  const signatureHtml = signatures.length > 0
-    ? `<div style="margin-top: 16pt; padding-top: 8pt; border-top: 1px solid #CCCCCC; color: #666666; font-size: 10pt;">${signatureImages ? signatureImages + '<br>' : ''}${signatures[0]}</div>`
-    : ''
-
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="color-scheme" content="light">
-<!--[if mso]>
-<style type="text/css">
-body, table, td {font-family: ${fontFamily}, Arial, sans-serif !important; font-size: 11pt !important;}
-</style>
-<![endif]-->
-</head>
-<body style="margin: 0; padding: 0; background-color: #FFFFFF;">
-<div style="font-family: ${fontFamily}; font-size: 11pt; color: #000000; line-height: 1.4;">
-${htmlParagraphs}
-${signatureHtml}
-</div>
-</body>
-</html>`
-}
-
-function formatLine(line: string): string {
-  let formatted = escapeHtml(line)
-
-  formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-  formatted = formatted.replace(/\*(.+?)\*/g, '<em>$1</em>')
-
-  formatted = formatted.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" style="color: #0563C1; text-decoration: underline;">$1</a>')
-
-  return formatted
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
+ВАЖНО: Выведи ТОЛЬКО HTML, без обёрток, без пояснений. Начни сразу с <!DOCTYPE html> или <html>.`
 }
