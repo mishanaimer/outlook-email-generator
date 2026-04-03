@@ -119,7 +119,10 @@ export default function Home() {
         })
       })
 
-      if (!res.ok) throw new Error('Не удалось сгенерировать письмо')
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => null)
+        throw new Error(errorData?.error || 'Не удалось сгенерировать письмо')
+      }
 
       const data = await res.json()
       setResult(data)

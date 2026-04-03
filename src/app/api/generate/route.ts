@@ -13,6 +13,26 @@ const FREE_MODELS = [
   'qwen/qwen2.5-72b-instruct:free'
 ]
 
+async function tryModels(models: string[], systemPrompt: string, userPrompt: string) {
+  for (const model of models) {
+    try {
+      const response = await openai.chat.completions.create({
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        temperature: 0.7,
+        max_tokens: 2000
+      })
+      return response.choices[0].message.content || ''
+    } catch (err: any) {
+      console.warn(`Model ${model} failed:`, err?.message || err)
+    }
+  }
+  throw new Error('Все бесплатные модели недоступны')
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
@@ -25,19 +45,17 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const hasKey = !!(process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY)
+    if (!hasKey) {
+      return NextResponse.json(
+        { error: 'API ключ не настроен. Добавьте OPENROUTER_API_KEY в переменные окружения Vercel.' },
+        { status: 500 }
+      )
+    }
+
     const systemPrompt = buildSystemPrompt(emailSamples, analysis)
 
-    const response = await openai.chat.completions.create({
-      model: FREE_MODELS[0],
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: prompt }
-      ],
-      temperature: 0.7,
-      max_tokens: 2000
-    })
-
-    const generatedText = response.choices[0].message.content || ''
+    const generatedText = await tryModels(FREE_MODELS, systemPrompt, prompt)
 
     const htmlOutput = textToOutlookHtml(generatedText, analysis)
 
@@ -45,10 +63,10 @@ export async function POST(request: NextRequest) {
       text: generatedText,
       html: htmlOutput
     })
-  } catch (error) {
-    console.error('Generate error:', error)
+  } catch (error: any) {
+    console.error('Generate error:', error?.message || error)
     return NextResponse.json(
-      { error: 'Ошибка генерации письма' },
+      { error: error?.message || 'Ошибка генерации письма' },
       { status: 500 }
     )
   }
